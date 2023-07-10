@@ -6,21 +6,37 @@ import typing
 import logging
 from copy import copy, deepcopy
 
+from bioscreen import validations
+
 logger = logging.getLogger(__name__)
 logger.setLevel('INFO')
 
+from attrdictionary import AttrMap
+
 import attrs
 import pandas as pd
-from attrs import define, field
-import numpy as np
 
-neglog10 = lambda p: -np.log10(p)
+from attrs import define, Factory, field
 
 from typing import Optional, List, Tuple, Dict, Callable, Any
 
 from statsmodels.stats.multitest import fdrcorrection
 
 import xlsxwriter
+
+from bioscreen.utils import (
+    is_numeric,
+    neglog10,
+    AMap
+)
+
+from bioscreen.validations import (
+    validate_count_df,
+    validate_screen_input,
+    validate_comparisons_table,
+    validate_sample_details,
+    validate_cols
+)
 
 def rename_df_columns(tbl:pd.DataFrame, newcols:dict):
     # rename columns
@@ -32,6 +48,15 @@ def rename_df_columns(tbl:pd.DataFrame, newcols:dict):
 
 StrOptional = Optional[str]
 CollectionOptional = Optional[typing.Collection]
+
+# COLS = AttrMap(dict(
+#     comparisons=dict(
+#         test='Test',
+#         ctrl='Control',
+#         paired='Paired',
+#     )
+# ))
+
 
 class StatColumns:
     """Column mappings, and primary score/p/fdr.
@@ -95,7 +120,7 @@ class StatColumns:
     @classmethod
     def from_dict(cls, label_table:typing.Union[pd.DataFrame, dict[str, list]], **kwargs):
         """Init from a table/df with columns/keys:
-        original, good, short, long
+        "original", "good", "short", "long"
 
         kwargs passed to constructor"""
 
@@ -126,7 +151,7 @@ class Comparison:
 
 
 # todo probably give up on this, just have Result.table = pd.DataFrame
-class ComparisonsTable(pd.DataFrame):
+class ComparisonsResults(pd.DataFrame):
     # def comparison(self, ctrl, test) -> pd.DataFrame:
     #     cmp = Comparison(ctrl, test)
     #     return self[cmp]
@@ -140,11 +165,10 @@ class ComparisonsTable(pd.DataFrame):
         return self.columns.levels[0]
 
 
-
-def comptab_from_dir(
+def comp_results_from_dir(
         results_dir, fn_to_comp: Callable,
         columns:StatColumns=None, sep=',',
-    ) -> tuple[ComparisonsTable, list[Any]]:
+    ) -> tuple[ComparisonsResults, list[Any]]:
     """Load csv in dir, return a multiindexed DF with columns parsed
     from filenames (no directory) using fn_to_col.
 
@@ -162,12 +186,12 @@ def comptab_from_dir(
             tbl = rename_df_columns(tbl, columns.original)
         results[str(comp)] = tbl
         comparisons.append( comp)
-    return (ComparisonsTable(pd.concat(results, axis='columns')), comparisons)
+    return (ComparisonsResults(pd.concat(results, axis='columns')), comparisons)
 
 
 @define
 class AnalysisResults:
-    table: ComparisonsTable
+    table: ComparisonsResults
     columns: StatColumns
     comparisons: List[Comparison]
     # todo
@@ -209,7 +233,7 @@ class AnalysisResults:
         return self.table[comp].copy()
 
 
-    def write_comptab_to_excel(self, filename, columns:Optional[Dict[str,str]]=None, **xlsx_table_opts):
+    def write_comp_results_to_excel(self, filename, columns:Optional[Dict[str,str]]=None, **xlsx_table_opts):
         """Write comparisons table as excel workbook with one table
         per comp.
 
@@ -255,6 +279,7 @@ class AnalysisResults:
             )
 
         workbook.close()
+
 
 GSCollectionName = str
 GSName = str
@@ -346,102 +371,14 @@ class GeneSetCollections(Dict[GSCollectionName, Dict[GSName, GeneSet]]):
 #     # todo get info from the .info.csv files
 
 
-# # partially written, inherit from df?
-# class GeneSetCollection(pd.DataFrame):
-#     # note, all methods will return a DF not this class
-#
-#     @staticmethod
-#     def sets_from_tsl(filename, collection):
-#         gene_sets = {}
-#
-#         with open(filename) as f:
-#             for line in f:
-#                 line = line.strip()
-#                 spline = line.split('\t')
-#                 setname = spline[0]
-#                 genes = pd.Series(spline[1:])
-#                 gs = GeneSet(setname, genes, collection)
-#                 gene_sets[setname] = gs
-#         return gene_sets
-#
-#     @classmethod
-#     def from_tsl_dir(cls, directory):
-#         """Assumes filnames are '{collection name}.tsl', first value
-#         is gene set names, and all after are genes. """
-#         gsets_dir = pathlib.Path(directory)
-#         gcollections:Dict[str, GeneSetCollection] = {}
-#         for fn in os.listdir(gsets_dir):
-#             if fn.endswith('.tsl'):
-#                 collname = fn.__str__().split('.')[-1]
-#                 gcollections[collname] = GeneSetCollection.from_tsl(
-#                     gsets_dir/fn, collname
-#                 )
-#         return gcollections
-
-
-# # A
-# @define
-# class __GeneSetCollection:
-#     gene_sets: Dict[str, GeneSet]
-#
-#     @classmethod
-#     def from_tsl(cls, filename, collection):
-#         gene_sets = {}
-#
-#         with open(filename) as f:
-#             for line in f:
-#                 line = line.strip()
-#                 spline = line.split('\t')
-#                 setname = spline[0]
-#                 genes = pd.Series(spline[1:])
-#                 gs = GeneSet(setname, genes, collection)
-#                 gene_sets[setname] = gs
-#         return cls(gene_sets)
-#
-#     def genes_in_set(self, setname:str):
-#         return self.gene_sets[setname].genes
-#
-#     @staticmethod
-#     def genesets_from_tsl_dir(gsets_dir) :
-#         """Assumes filnames are '{collection name}.tsl', first value
-#         is gene set names, and all after are genes. """
-#         gsets_dir = pathlib.Path(gsets_dir)
-#         gcollections:Dict[str, GeneSetCollection] = {}
-#         for fn in os.listdir(gsets_dir):
-#             if fn.endswith('.tsl'):
-#                 collname = fn.__str__().split('.')[-1]
-#                 gcollections[collname] = GeneSetCollection.from_tsl(
-#                     gsets_dir/fn, collname
-#                 )
-#         return gcollections
-
-
-# class GSEColumns(ResultsColumns):
-#     def __init__(self,setname, setid, setsize, *statargs, ):
-#         super().__init__(*statargs)
-#         self.setname = StatKey(setname, 'Name', 'Name')
-#         self.setid = StatKey(setid, 'ID', 'ID')
-#         self.setsize = StatKey(setsize, 'Size', 'Size')
-
-# class PadogColumns(GSEColumns):
-#     def __init__(self):
-#
-#         super().__init__(
-#             'Name', 'ID', 'Size',
-#             'PADOG', 'padog0', 'PADOG Score', 'Ppadog', 'FDR',
-#         )
-
-
-
-
 @define
 class GeneSetEnrichmentResults(AnalysisResults):
     collections: GeneSetCollections
 
 
     @staticmethod
-    def comptab_from_dir(results_dir, columns:StatColumns, doFDR=False) \
-            -> Tuple[ComparisonsTable, List[Comparison]]:
+    def compres_from_dir(results_dir, columns:StatColumns, doFDR=False) \
+            -> Tuple[ComparisonsResults, List[Comparison]]:
         """Load results from directory, assuming files names as
         {geneSetCollection}.{treat}.{ctrl}.csv. Concats the collection
         results into a single table with a Collection column."""
@@ -474,7 +411,7 @@ class GeneSetEnrichmentResults(AnalysisResults):
             tables.append(resdf)
 
         # concat list of tables.
-        results = ComparisonsTable(
+        results = ComparisonsResults(
             pd.concat(tables, axis='index')
         )
 
@@ -511,7 +448,7 @@ class PadogResults(GeneSetEnrichmentResults):
             score=cls._score,
         )
 
-        results, comparisons = GeneSetEnrichmentResults.comptab_from_dir(results_dir, stat_cols)
+        results, comparisons = GeneSetEnrichmentResults.compres_from_dir(results_dir, stat_cols)
 
         nicenames = results.xs('Name', 'columns', level=1).iloc[:, 0].apply(
             GeneSetCollections.set_name_from_msig
@@ -534,7 +471,7 @@ class PadogResults(GeneSetEnrichmentResults):
 @define
 class DGEResults(AnalysisResults):
     @staticmethod
-    def load_results(results_dir, columns, index_name='Gene') -> tuple[ComparisonsTable, list[Any]]:
+    def load_results(results_dir, columns, index_name='Gene') -> tuple[ComparisonsResults, list[Any]]:
 
 
         def fn_to_comp(fn):
@@ -545,13 +482,13 @@ class DGEResults(AnalysisResults):
             return comp
 
         print("assuming filename is '{test}.{ctrl}.csv' ")
-        comptab, comparisons = comptab_from_dir(
+        compres, comparisons = comp_results_from_dir(
             results_dir,
             fn_to_comp,
             columns
         )
-        comptab.index.name = index_name
-        return comptab, comparisons
+        compres.index.name = index_name
+        return compres, comparisons
 
 
 @define
@@ -592,6 +529,56 @@ class LimmaResults(AnalysisResults):
         return cls(res, stat_cols, comparisons)
 
 
+DfOrPath = typing.Union[pd.DataFrame, os.PathLike, ]
+
+validator_passthrough = lambda self, attribute, value: value
+
+@define
+class ScreenExperiment:
+    name: str
+    version: str
+    counts: typing.Mapping[str, pd.DataFrame]
+    sample_details: pd.DataFrame
+    group_details: pd.DataFrame
+    comparisons: pd.DataFrame
+    results: typing.Mapping[str, AnalysisResults] = Factory(AttrMap)
+
+    def __attrs_post_init__(self):
+        validate_comparisons_table(self.comparisons)
+        validate_sample_details(self.sample_details)
+
+        # Just test the first count file, assuming others are derived from it
+        cnt = list(self.counts.values())[0]
+        validate_count_df(cnt)
+        validate_screen_input(cnt, self.sample_details, self.comparisons)
+
+    @staticmethod
+    def grp_details_from_sample(sample_details):
+        groupdeets = sample_details.dropduplicates('SampleGroup').set_index('SampleGroup')
+        return groupdeets
+
+    @classmethod
+    def metadata_from_text_files(cls, name, version,
+            counts, sample_details, comparisons, cnt_type='raw'):
+        """Generate Screen experiment from file paths pointing to CSV for
+        sample_details or comparisons, and TSV for counts."""
+        cnt = pd.read_csv(counts, index_col=0, sep='\t')
+        deets = pd.read_csv(sample_details)
+        grps = cls.grp_details_from_sample(deets)
+
+        deets.set_index(deets.columns[0], inplace=True, drop=False)
+
+        comps =  pd.read_csv(comparisons)
+
+        return cls(
+            name=name,
+            version=version,
+            counts=AMap({cnt_type:cnt}),
+            sample_details=deets,
+            group_details=grps,
+            comparisons=comps
+        )
+
 def _test_padog(
         rdir='/mnt/m/tasks/MTX639_TAC_MoA_RNAseq/padog/ctrl_first/t3_htseq/',
         gsdir='/mnt/m/data_collections/MSigDB_parsed/mouse_symbols'):
@@ -606,6 +593,9 @@ def _test_padog(
 def _test_limma(dir='/mnt/m/tasks/MTX639_TAC_MoA_RNAseq/limma/t3_star_htseq'):
     r = LimmaResults.from_dir(dir)
     print(r.table.head())
+
+
+
 
 if __name__ == '__main__':
     _test_padog()
