@@ -120,9 +120,10 @@ class CountPCA:
                 if len(values) < 2:
                     continue
 
-                res = stats.f_oneway(*values)
 
-                p_res[factor] = res.pvalue  # not an error, PyCharm
+                res:typing.NamedTuple = stats.f_oneway(*values) # ignore type error
+
+                p_res[factor] = res.pvalue  # ignore
                 f_res[factor] = res.statistic
 
         ptable = pd.DataFrame(table['p'])

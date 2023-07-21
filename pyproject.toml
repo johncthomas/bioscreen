@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "bioscreen"
+version = "0.0.1"
+dependencies = [
+    "pandas",
+    "seaborn",
+    "attrdictionary",
+    "attrs",
+    'scikit-learn',
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+namespaces = false
+#include = ["pkg*"]  # alternatively: `exclude = ["additional*"]`

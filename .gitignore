@@ -1,2 +1,5 @@
-/bioscreen.egg-info/
+*.egg-info
 .gitignore
+token*
+build/
+build/*
