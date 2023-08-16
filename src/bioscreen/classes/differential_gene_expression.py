@@ -1,73 +1,95 @@
-from bioscreen.classes.base import logger, ComparisonsResults, StatColumns
+from bioscreen.classes.base import logger, CompsResultDF, StatColumns, SigCols
 from bioscreen._imports import *
 from bioscreen.classes.results import AnalysisResults, comp_results_from_dir
-from bioscreen.classes.comparison import Comparison, CompList
+from bioscreen.classes.comparison import Comparison, CompDict
 from attrs import define
 
+__all__ = ['LimmaResults', 'load_results']
 
 
-@define
-class DGEResults(AnalysisResults):
-    @staticmethod
-    def load_results(results_dir, columns, index_name='Gene') -> tuple[ComparisonsResults, CompList]:
+def load_results(results_dir, columns, index_name='Gene') \
+        -> tuple[CompsResultDF, CompDict]:
+    def fn_to_comp(fn):
+        logger.info(f'DGEResults: fn_to_comp({fn})')
+        test, ctrl, _ = fn.split('.')
+
+        comp = Comparison(control=ctrl, test=test)
+        return comp
+
+    print("assuming filename is '{test}.{ctrl}.csv' ")
+    compres, comparisons = comp_results_from_dir(
+        results_dir,
+        fn_to_comp,
+        columns
+    )
+    compres.index.name = index_name
+    return compres, comparisons
 
 
-        def fn_to_comp(fn):
-            logger.info(f'DGEResults: fn_to_comp({fn})')
-            test, ctrl, _ = fn.split('.')
+def get_limma_cols() -> StatColumns:
+    # this ended up silly because I kept changing my mind about how to do it
 
-            comp = Comparison(control=ctrl, test=test)
-            return comp
+    sig_cols = SigCols.map(**dict(zip(
+        (SigCols.LFC.key, SigCols.p.key, SigCols.FDR.key, SigCols.p10.key, SigCols.FDR10.key),
+        ('logFC', 'P.Value', 'adj.P.Val', 'P10', 'FDR10'),
+    )))
 
-        print("assuming filename is '{test}.{ctrl}.csv' ")
-        compres, comparisons = comp_results_from_dir(
-            results_dir,
-            fn_to_comp,
-            columns
-        )
-        compres.index.name = index_name
-        return compres, comparisons
-
-
-@define
-class LimmaResults(AnalysisResults):
-
-    _coltable = {
-        'original': ['Gene', 'logFC', 'AveExpr', 't', 'F', 'P.Value', 'adj.P.Val', 'B', 'P10', 'FDR10'],
-        'good': ['Gene', 'LFC', 'Expr', 'T', 'F', 'P', 'FDR', 'LogOdds', 'P10', 'FDR10'],
-        'long': ['Gene', 'Log2(FC)', 'Ave. Expression', 't-statistic', 'F-statistic', 'p-value', 'FDR', 'Log odds',
-                 '-log10(p)', '-log10(FDR)'],
-        'short': ['Gene', 'LFC', 'Expr', 't', 'F', 'p', 'FDR', 'LogOdds', '-log10(p)', '-LOG10(FDR)']
+    coltable = {
+        'original': ['AveExpr', 't', 'F', 'B', ],
+        'key': ['Expr', 't', 'F', 'LogOdds', ],
+        'label': ['Ave. Expression', 't-statistic', 'F-statistic', 'Log odds'],
+        'table': ['Expr', 't', 'F', 'LogOdds', ]
     }
 
-    _score = 'LFC'
-    _results_cols = ['Gene', 'LFC', 'p', 'FDR',  'Expr', 'LogOdds']
+    spec_cols = StatColumns.from_df(pd.DataFrame(coltable))
+    intermediatecols: StatColumns = StatColumns(dict(spec_cols) | dict(sig_cols))
+
+    order = ['LFC', 'p', 'FDR', 'Expr', 't', 'F', 'LogOdds', 'p10', 'FDR10']
+    assert set(order) == set(intermediatecols.keys())
+    limma_cols = StatColumns({k: intermediatecols[k] for k in order})
+
+    return limma_cols
+LIMMACOLS = get_limma_cols()
+
+@define(kw_only=True)
+class LimmaResults(AnalysisResults):
 
     @classmethod
-    def _get_columns(cls, index_name='Gene'):
-        coltab = {}
-        for k, v in  cls._coltable.items():
-            coltab[k] = copy(v)
-            coltab[k][0] = index_name
-        results_cols = copy(cls._results_cols)
-        results_cols[0] = index_name
+    def build(cls, tables: CompsResultDF | Mapping[str, pd.DataFrame],
+              comparisons:CompDict, columns=LIMMACOLS,
+              scorekey='LFC'):
 
-        return StatColumns.from_dict(coltab, results_cols=results_cols, score='LFC')
+        table = cls.table_builder(tables, comparisons, columns)
 
+        return cls(table=table, comparisons=comparisons,
+                            columns=columns, scorekey=scorekey)
 
     @classmethod
-    def from_dir(cls, results_dir, index_name='Gene'):
+    def from_dir(
+            cls,
+            results_dir,
+            index_name='Gene',
+            comparisons:CompDict=None):
 
-        stat_cols =  cls._get_columns()
-        (res, comparisons) = DGEResults.load_results(
-            results_dir, stat_cols,
+
+        (res, comps) = load_results(
+            results_dir, LIMMACOLS,
             index_name=index_name
         )
+        if comparisons is None:
+            comparisons = comps
         res.index.name = index_name
-        return cls(res, stat_cols, comparisons)
+        return cls(table=res, comparisons=comparisons, columns=LIMMACOLS)
 
 
-DfOrPath = typing.Union[pd.DataFrame, os.PathLike, ]
-
-validator_passthrough = lambda self, attribute, value: value
-
+if __name__ == '__main__':
+    pass
+    # import pickle
+    # d = pathlib.Path('/mnt/m/tasks/NA327_Proteomics_UbPulldown/pickles2')
+    # with open(d/'smolcomp.2.pickle', 'rb') as f:
+    #     comp = pickle.load(f)
+    # with open(d/'test_tables.1.pickle', 'rb') as f:
+    #     tables = pickle.load(f)
+    #
+    # res = LimmaResults.build(tables=tables, comparisons=comp,)
+    # print(res.comparisons[0].grimps)

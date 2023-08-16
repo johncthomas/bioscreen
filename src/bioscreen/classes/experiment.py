@@ -1,11 +1,31 @@
+from bioscreen._imports import *
+import pandas as pd
+
 from bioscreen.classes.base import *
-from bioscreen.classes.comparison import CompList
+from bioscreen.classes.comparison import CompDict
 from bioscreen.classes.results import AnalysisResults
 from attrs import define, Factory
 from bioscreen.utils import ValidationError, validate_sample_details, validate_count_df
 
 
-def validate_screen_input(count:pd.DataFrame, details:pd.DataFrame, comparisons:CompList=None):
+
+__all__ = [
+    'ScreenExperiment',
+    'validate_screen_input',
+]
+
+SDCOLFIXES = {'treat': 'Treatment',
+                 'Treat': 'Treatment',
+                 'conc': 'Concentration',
+                 'Conc': 'Conentration',
+                 'Conc.': 'Concentration',
+                 'SampleGroups': 'SampleGroup',
+                 'Rep': 'Replicate',
+                 'rep': 'Replicate'}
+
+
+
+def validate_screen_input(count:pd.DataFrame, details:pd.DataFrame, comparisons:CompDict=None):
     """Check that the samples/sampleGroups match across count details and comparisons dataframes"""
 
     def notin(a, b):
@@ -47,33 +67,49 @@ class ScreenExperiment:
     name: str
     version: str
     counts: typing.Mapping[str, pd.DataFrame]
-    sample_details: pd.DataFrame
-    group_details: pd.DataFrame
-    comparisons: CompList
+    sample_details: pd.DataFrame = attrs.field(converter=lambda s: s.copy())
+
+    #optional
+    comparisons: CompDict = None
+    group_details: pd.DataFrame = Factory(
+        lambda self: self.group_details_from_sample(self.sample_details),
+        takes_self=True,
+    )
     results: typing.Mapping[str, AnalysisResults] = Factory(AMap)
+    primary_counts:str='raw'
+    fix_columns:bool = True
 
     def __attrs_post_init__(self):
         #validate_comparisons_table(self.comparisons)
+        if self.fix_columns:
+            df_rename_columns(self.sample_details, SDCOLFIXES,
+                           inplace=True, verbose=True)
         validate_sample_details(self.sample_details)
 
         # Just test the first count file, assuming others are derived from it
-        cnt = list(self.counts.values())[0]
+        cnt = self.counts[self.primary_counts]
         validate_count_df(cnt)
-        validate_screen_input(cnt, self.sample_details, self.comparisons)
+        validate_screen_input(
+            count=cnt,
+            details=self.sample_details,
+            comparisons=self.comparisons
+        )
 
     @staticmethod
-    def grp_details_from_sample(sample_details):
-        groupdeets = sample_details.dropduplicates('SampleGroup').set_index('SampleGroup')
+    def group_details_from_sample(sample_details:pd.DataFrame):
+        groupdeets = sample_details.drop_duplicates(
+            'SampleGroup'
+        ).set_index('SampleGroup', drop=False).drop('Sample', errors='ignore', axis=1)
         return groupdeets
 
     @classmethod
-    def metadata_from_text_files(cls, name, version,
-            counts, sample_details, comparisons, cnt_type='raw'):
+    def from_text_files(cls, name, version,
+                        counts, sample_details, comparisons, cnt_type='raw'):
         """Generate Screen experiment from file paths pointing to CSV for
         sample_details or comparisons, and TSV for counts."""
         cnt = pd.read_csv(counts, index_col=0, sep='\t')
         deets = pd.read_csv(sample_details)
-        grps = cls.grp_details_from_sample(deets)
+        grps = cls.group_details_from_sample(deets)
 
         deets.set_index(deets.columns[0], inplace=True, drop=False)
 
@@ -87,5 +123,7 @@ class ScreenExperiment:
             group_details=grps,
             comparisons=comps
         )
+
+
 
 

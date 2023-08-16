@@ -1,9 +1,12 @@
+import typing
+
 from bioscreen._imports import *
 from bioscreen.classes.base import SampleGroup
 
 
-from attrs import define
+from attrs import define, Factory, field, validators
 
+__all__ = ['Comparison', 'CompDict']
 
 DEFAULT_COMP_JOINER = '-'
 
@@ -18,158 +21,293 @@ class Comparison:
         control: SampleGroup to be used as control in a comparison.
         test: SampleGroup to be compared to control.
         paired: Indicate that replicates in sample group are paired by order.
-        name: A name to refer to the comparison if we don't want to use
-            test-control or whatever.
+        name: A name to refer to the comparison. Defaults to "test-control".
+            Is key in CompDict
+        label: A longer name for figures perhaps. Defaults to name.
+        groups: Membership of groups, {"groupname":bool}.
 
-    Properties:
-        str: "test-control" by default, can change joiner and test|control order.
+    Property
+        differential: Is this a differential comparison?
+            True if control is a Comparison.
+
+    Methods: (note: differential comps get printed differently)
+        str: "test-control". kwarg test_first controls test|control order.
+            Uses global DEFAULT_COMP_JOINER
         arrow_Str: "control ➤ test"
         formula_str: "test - control"
 
     """
-    control: SampleGroup
-    test: SampleGroup
+    control: SampleGroup|Self
+    test: SampleGroup|Self
     paired:bool = False
-    name:str = None #Factory(lambda self: str(self), takes_self=True)
+    name:str = Factory(lambda self: self.joined(), takes_self=True)
+    label:str = Factory(lambda self: self.name, takes_self=True)
+    groups: dict = field(
+        default=Factory(dict, ), validator=validators.deep_mapping(
+            validators.instance_of(str), validators.instance_of(bool)
+        )
+    )
 
-    def __str__(self, test_first=True):
-        test = str(self.test)
-        ctrl = str(self.control)
-        if test_first:
-            first = test
-            last = ctrl
-        else: # control first
-            first = ctrl
-            last = test
-        return f"{first}{DEFAULT_COMP_JOINER}{last}"
+    other_cols:Mapping = None
+
+    # Columns that should be used as kwargs when converting a DF
+    #  note, index is lower cased before being used.
+    # Groups gets handled differently, cast to separate columns
+    _kwargs = pd.Index(['control', 'test', 'paired', 'name', 'label'])
+
+    @property
+    def differential(self):
+        return isinstance(self.control, Comparison)
+
+    @classmethod
+    def from_series(cls, compseries:pd.Series):
+        """Convert a row from a DF into a Comparison.
+
+        - Primary Comparison(**kwargs) are pulled from lower-case casted column
+        names.
+        - Boolean columns are converted to a dict stored in self.groups.
+        - Other columns are placed in self.other_cols.
+        """
+        # lower case index for getting kwargs
+        lc_series = compseries.copy()
+        lc_series.index = lc_series.index.str.lower()
+        kw_mask = lc_series.index.isin(cls._kwargs)
+
+        # convert the series to kwargs, need to filter self._attr to things that
+        #   exist in the DF
+        kwargs = lc_series[kw_mask].to_dict()
+
+        # # In order to keep the to/from_df mirrored, if there's a `Groups`
+        # #   column it's just going into .other_cols.
+
+        # find cols to be used as groups
+        bools = [(type(v) == bool) for v in compseries.values]
+
+        # add the columns where bool is True
+        if any(bools):
+            kwargs['groups'] = compseries[bools].to_dict()
+        # else the default value for groups is used.
+
+        # other columns get dumped in self.other_cols
+        other_mask = ~(kw_mask|bools)
+        if other_mask.any(): # if not all columns were kwargs
+            kwargs['other_cols'] = compseries[other_mask].to_dict()
+
+        return cls(**kwargs)
+
+    def to_series(self) -> pd.Series:
+        """Return series with index from attributes all with initial caps,
+        self.other_cols converted to separate items and groups to boolean items
+
+        Examples:
+            cmp = Comparison(
+                test='T', control='C', groups={'Good':True, 'Bad':False},
+                other_cols={'Etc':'thing'}
+            )
+            cmp.to_series()
+
+            [1] Control        C
+                Test           T
+                Paired     False
+                Name         T-C
+                Label        T-C
+                Etc        thing
+                Good        True
+                Bad        False
+                dtype: object
+        """
+        initcap = lambda s: s[0].upper() + s[1:]
+        seriesdict = dict()
+
+        for attr in self._kwargs:
+            k = initcap(attr)
+            seriesdict[k] = getattr(self, attr)
+
+        if self.other_cols is not None:
+            seriesdict.update(self.other_cols)
+
+
+        if self.groups:
+            seriesdict.update(self.groups)
+
+
+        seriesdict['Differential'] = self.differential
+
+        return pd.Series(seriesdict, index=list(seriesdict.keys()))
+
+    def joined(self,  joiner=DEFAULT_COMP_JOINER, test_first=True,):
+        """f"{self.test}-{self.control}" by default."""
+
+        if not self.differential:
+            test = str(self.test)
+            ctrl = str(self.control)
+            if test_first:
+                first = test
+                last = ctrl
+            else: # control first
+                first = ctrl
+                last = test
+            return f"{first}{joiner}{last}"
+        else:
+            return f"{self.control.name} ➤ {self.test.name}"
+
+    def __str__(self):
+        return self.name
 
     def arrow_str(self, ):
-        return self.str(' ➤ ', test_first=False)
+        return self.joined(joiner=' ➤ ', test_first=False)
 
-    def str(self, joiner:str=None, test_first=True):
-        if joiner is None:
-            return self.__str__()
-        return self.__str__(test_first=test_first).replace(DEFAULT_COMP_JOINER, joiner)
+    def str(self,):
+        return self.__str__()
 
     def formula_str(self):
         """For formulas used in Limma etc, just
         self.test - self.control"""
+        if self.differential:
+            return f"({self.test.formula_str()}) - ({self.control.formula_str()})"
         return f"{self.test} - {self.control}"
 
 
-@define
-class DifferentialComparison:
-    """Hold sample relationships for a differential comparison, where
-    one pair of samples (the baseline comparison) is compared to another
-    (the _other_ comparison).
+# @define
+# class DifferentialComparison:
+#     """Hold sample relationships for a differential comparison, where
+#     one pair of samples (the baseline comparison) is compared to another
+#     (the _other_ comparison).
+#
+#     Properties ending in _str (and `str`) are string representations.
+#     In all except formula_str, if both internal comparisons have
+#     `comp.name != None`, the names will be used.
+#
+#     Attributes:
+#         baseline: Comparison used as baseline
+#         other: Comparison to be compared to baseline.
+#         paired: Indicate that replicates in sample group are paired by order.
+#         name: A name to refer to the comparison. Defaults to test-control.
+#             Is key in CompDict
+#
+#
+#     Properties:
+#         str: If both `comparison`s have a `name`, name will be used,
+#             otherwise default is "otherTest_otherCtrl-baseTest_baseCtrl".
+#         arrow_Str: "baseline ➤ other"
+#         formula_str: "(otherTest - otherCtrl) - (baseTest - baseCtrl)".
+#             For R formulas.
+#     """
+#     baseline: Comparison
+#     other: Comparison
+#     name: str
+#     paired:bool = False
+#     groups: set[str] = attrs.Factory(set)
+#
+#     def __attrs_post_init__(self):
+#         if type(self.groups) is not set:
+#             self.groups = set(self.groups)
+#
+#     def _compnames_bo(self) -> tuple[str, str]:
+#         b = self.baseline
+#         o = self.other
+#         if (b.name is not None) and (o.name is not None):
+#             return b.name, o.name
+#         return b.str(joiner='_'), b.str(joiner='_')
+#
+#     def __str__(self):
+#         bn, on = self._compnames_bo()
+#         return f"{on}{DEFAULT_COMP_JOINER}{bn}"
+#
+#     def arrow_str(self) -> str:
+#         bn, on = self._compnames_bo()
+#         return f"{bn} ➤ {on}"
+#
+#     def str(self, joiner:str=None, test_first='ignored') -> str:
+#         if joiner is None:
+#             return self.__str__()
+#         return self.__str__().replace(DEFAULT_COMP_JOINER, joiner)
+#
+#     def formula_str(self) -> str:
+#         """For formulas used in Limma etc, just
+#         self.test - self.control"""
+#         return f"({self.other.test} - {self.other.control}) - ({self.baseline.test} - {self.baseline.control})"
 
-    Properties ending in _str (and `str`) are string representations.
-    In all except formula_str, if both internal comparisons have
-    `comp.name != None`, the names will be used.
 
-    Attributes:
-        baseline: Comparison used as baseline
-        other: Comparison to be compared to baseline.
-        paired: Indicate that replicates in sample group are paired by order.
-        name: A name to refer to the comparison if we don't want to use
-            test-control or whatever.
+class CompDict(AttrMapAC[str, Comparison]):
+    """Mapping of Comparison with samples, paired, unpaired and filter functions.
 
+    If invoked with a Collection[Comparison], it uses .name attr for keys."""
 
-    Properties:
-        str: If both `comparison`s have a `name`, name will be used,
-            otherwise default is "otherTest_otherCtrl-baseTest_baseCtrl".
-        arrow_Str: "baseline ➤ other"
-        formula_str: "(otherTest - otherCtrl) - (baseTest - baseCtrl)".
-            For R formulas.
+    # def __new__(cls, , value):
+    #     if isinstance(obj, Mapping):
+    #         return super().__new__(cls)
+    #     return super().__new__(cls)
 
+    def __init__(self, comps: Mapping[str, Comparison] | Collection[Comparison]):
+        if not isinstance(comps, Mapping):
+            comps = {c.name: c for c in comps}
+        super().__init__(comps)
 
-    """
-    baseline: Comparison
-    other: Comparison
-    paired:bool = False
-    name:str = None #Factory(lambda self: str(self), takes_self=True)
-
-    def _compnames_bo(self) -> tuple[str, str]:
-        b = self.baseline
-        o = self.other
-        if (b.name is not None) and (o.name is not None):
-            return b.name, o.name
-        return b.str(joiner='_'), b.str(joiner='_')
-
-    def __str__(self):
-        bn, on = self._compnames_bo()
-        return f"{on}{DEFAULT_COMP_JOINER}{bn}"
-
-    def arrow_str(self) -> str:
-        bn, on = self._compnames_bo()
-        return f"{bn} ➤ {on}"
-
-    def str(self, joiner:str=None, test_first='ignored') -> str:
-        if joiner is None:
-            return self.__str__()
-        return self.__str__().replace(DEFAULT_COMP_JOINER, joiner)
-
-    def formula_str(self) -> str:
-        """For formulas used in Limma etc, just
-        self.test - self.control"""
-        return f"({self.other.test} - {self.other.control}) - ({self.baseline.test} - {self.baseline.control})"
-
-
-class CompList(List[Comparison|DifferentialComparison]):
-    """List of Comparison with samples, paired, unpaired and filter functions.
-
-    Can take DifferentialComparisons, but can't return a DF with them and
-    things might get tricky. """
     def samples(self) -> list[SampleGroup]:
-        c, s = [set([getattr(cmp, k) for cmp in self]) for k in ('control', 'test')]
-        return list(c|s)
+        """List samples used as either test or control"""
+        c, s = [set([getattr(cmp, k) for cmp in self.values()]) for k in ('control', 'test')]
+        return list(c | s)
 
-    def paired_comps(self) -> Self:
-        return CompList([c for c in self if c.paired])
+    def filter_by_group(self, groups: str | Collection[str]):
+        if type(groups) == str:
+            groups = [groups]
 
-    def unpaired_comps(self) -> Self:
-        return CompList([c for c in self if not c.paired])
+        l = {c.name: c for c in self.values()
+             if all([c.groups[grp] for grp in groups])}
+        return CompDict(l)
 
-    def filter(self, attribute:str, function:Callable) -> Self:
-        """Filter complist by attribute value using boolean function.
-
-        Args:
-            attribute: Name of the attr to test.
-            function: Function to test the attribute values.
-        """
-        l = []
-        for comp in self:
-            if function(getattr(self, attribute)):
-                l.append(comp)
-        return CompList(l)
+    def filter_by(self, f: Callable[[Comparison], bool]) \
+            -> Self:
+        """Filter comparisons from this CompList using a function that
+        takes a Comparison, and returns True or False."""
+        return CompDict({
+            c.name: c for c in self.values() if f(c)
+        })
 
     def to_df(self) -> pd.DataFrame:
-        """Return DF of Comparisons values. DifferentialComparisons are ignored."""
-        return pd.DataFrame([attrs.asdict(cmp) for cmp in self
-                             if type(cmp) is not DifferentialComparison])
+        """Return DF of Comparisons values. DifferentialComparison will have
+        a Comparison as the value in Test Control columns."""
+        df = pd.DataFrame({k: cmp.to_series() for k, cmp in self.items()}).T
+        return df
 
-    def to_str(self, joiner=DEFAULT_COMP_JOINER, test_first=True) -> List[str]:
-        return [c.str(test_first=test_first, joiner=joiner) for c in self]
+    def to_joined(self, joiner=DEFAULT_COMP_JOINER, test_first=True) -> List[str]:
+        return [c.joined(test_first=test_first, joiner=joiner) for c in self.values()]
+
+    def to_str(self) -> List[str]:
+        return [c.str() for c in self.values()]
 
     def to_formulas(self) -> List[str]:
-        return [c.formula_str() for c in self]
+        return [c.formula_str() for c in self.values()]
 
     def to_arrowed(self) -> List[str]:
-        return [c.arrow_str() for c in self]
+        return [c.arrow_str() for c in self.values()]
+
+    def names(self) -> list[str]:
+        return [c.name for c in self.values()]
 
     @classmethod
-    def from_df(cls, df:pd.DataFrame,
-                test_col:str='Test', ctrl_col:str='Control',
-                other_cols=('Paired', 'Name')):
+    def from_df(cls, df: pd.DataFrame, ):
+        d = {k: Comparison.from_series(row) for k, row in df.iterrows()}
+        return cls(d)
 
-        comps = []
+    def __iter__(self) -> typing.Iterator[str]:
+        return super().__iter__()
 
-        for _, row in df.iterrows():
-            t = row[test_col]
-            c = row[ctrl_col]
-            others = {k.lower():row[k] for k in other_cols}
-            comps.append(
-                Comparison(control=c, test=t, **others)
-            )
+    def __getitem__(self, item:str) -> Comparison:
+        return super().__getitem__(key=item)
 
-        return cls(comps)
+    def keys(self) -> list[str]:
+        # ._mapping is where AttrMap keeps it's info
+
+        return list(self._mapping.keys())
+
+    def values(self) -> typing.ValuesView[Comparison]:
+        return super().values()
+
+    def items(self, dict2attrmap=False) -> typing.ItemsView[str, Comparison]:
+        return super().items(dict2attrmap=dict2attrmap)
+
+
+def samples_of_comp(comparison:Comparison, sample_details):
+    return sample_details.loc[sample_details.SampleGroup.isin([comparison.control, comparison.test])].index

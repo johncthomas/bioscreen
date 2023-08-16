@@ -1,12 +1,18 @@
-
+import logging
 import os
 
 import pandas as pd
 from jttools.data_wrangling import AttrMapAC, is_numeric
+import typing
 
 Pathy = os.PathLike | str
 
 AMap = AttrMapAC
+
+DfOrPath = typing.Union[pd.DataFrame, os.PathLike, ]
+
+validator_passthrough = lambda self, attribute, value: value
+
 
 
 class ValidationError(Exception):
@@ -31,3 +37,4 @@ def validate_sample_details(deets:pd.DataFrame):
 
 def validate_comparisons_table(comps:pd.DataFrame):
     validate_cols(comps.columns, ['Test', 'Control', ])
+

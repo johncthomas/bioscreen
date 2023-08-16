@@ -7,11 +7,20 @@ name = "bioscreen"
 version = "0.0.1"
 dependencies = [
     "pandas",
-    "seaborn",
-    "attrdictionary",
+    "attrdictionary @ git+https://github.com/kiselas/AttrDictionary.git@master",
     "attrs",
     'scikit-learn',
+
+    #"rpy2"
 ]
+
+[project.optional-dependencies]
+R = ["rpy2"]
+plotting = [
+    "seaborn",
+    "matplotlib",
+]
+
 
 [tool.setuptools.packages.find]
 where = ["src"]

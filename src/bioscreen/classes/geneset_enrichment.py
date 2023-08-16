@@ -1,16 +1,22 @@
+# import pathlib
+# from jttools.data_wrangling import rename_columns
+
+
+from bioscreen._imports import *
 from bioscreen.classes.base import *
 from bioscreen.classes.results import AnalysisResults
-from bioscreen.classes.comparison import Comparison, CompList
+from bioscreen.classes.comparison import Comparison, CompDict
 from statsmodels.stats.multitest import fdrcorrection
 
 from attrs import define
 
+__all__ = ['GeneSetEnrichmentResults', 'GeneSetCollections', 'GeneSet', 'PadogResults']
 
 GSCollectionName = str
 GSName = str
 GeneSet = set
 
-class GeneSetCollections(Dict[GSCollectionName, Dict[GSName, GeneSet]]):
+class GeneSetCollections(dict[GSCollectionName, dict[GSName, GeneSet]]):
 
     @property
     def collections_map(self):
@@ -96,14 +102,13 @@ class GeneSetCollections(Dict[GSCollectionName, Dict[GSName, GeneSet]]):
 #     # todo get info from the .info.csv files
 
 
-@define
+@define(kw_only=True)
 class GeneSetEnrichmentResults(AnalysisResults):
     collections: GeneSetCollections
 
-
     @staticmethod
     def compres_from_dir(results_dir, columns:StatColumns, doFDR=False) \
-            -> Tuple[ComparisonsResults, CompList]:
+            -> Tuple[CompsResultDF, CompDict]:
         """Load results from directory, assuming files names as
         {geneSetCollection}.{treat}.{ctrl}.csv. Concats the collection
         results into a single table with a Collection column."""
@@ -121,13 +126,13 @@ class GeneSetEnrichmentResults(AnalysisResults):
             tbl = pd.read_csv(results_dir / fn, index_col=0)
             if doFDR:
                 tbl.loc[:, 'FDR'] = fdrcorrection(tbl.P)[1]
-            rename_columns(tbl, columns.original, inplace=True)
+            df_rename_columns(tbl, columns.original, inplace=True)
 
             # put the table into the structure
             if coll not in res_by_collctn:
                 res_by_collctn[coll] = {}
             res_by_collctn[coll][comp.str] = tbl
-        comparisons = CompList(list(comparisons))
+        comparisons = CompDict(list(comparisons))
         # go through dict of dict, creating multiindex DF and adding it to list
         tables = []
         for coll, res in res_by_collctn.items():
@@ -136,7 +141,7 @@ class GeneSetEnrichmentResults(AnalysisResults):
             tables.append(resdf)
 
         # concat list of tables.
-        results = ComparisonsResults(
+        results = CompsResultDF(
             pd.concat(tables, axis='index')
         )
 
@@ -149,12 +154,12 @@ class GeneSetEnrichmentResults(AnalysisResults):
         return table
 
 
-@define
+@define(kw_only=True)
 class PadogResults(GeneSetEnrichmentResults):
 
     _coltable = {
         'original': ['Name', 'ID', 'Size', 'meanAbsT0', 'padog0', 'PmeanAbsT', 'Ppadog', 'P10', 'FDR', 'FDR10'],
-         'good': ['Name', 'ID', 'Size', 'MeanAbsT0', 'Score', 'PUnweighted', 'P', 'P10', 'FDR', 'FDR10'],
+         'key': ['Name', 'ID', 'Size', 'MeanAbsT0', 'Score', 'PUnweighted', 'P', 'P10', 'FDR', 'FDR10'],
          'long': ['Name', 'ID', 'Size', 'Unweighted T-score', 'Weighted T-score', 'p-value (unweighted)',
                   'p-value', '-log10(p)', 'FDR', '-log10(FDR)'],
          'short': ['Name', 'ID', 'Size', 'T', 'Weighted T', 'p (unweighted)', 'p', '-log10(p)', 'FDR',
@@ -162,8 +167,6 @@ class PadogResults(GeneSetEnrichmentResults):
     }
     _results_cols = ['Name', 'Score', 'P', 'FDR', 'Size', 'ID',  ]
     _score='Score'
-
-
 
 
     @classmethod
@@ -185,8 +188,6 @@ class PadogResults(GeneSetEnrichmentResults):
             results.loc[:, (comp.str, 'Name')] = nicenames
 
         gcollections = GeneSetCollections.from_tsl_dir(gsets_dir)
-
-
 
         return cls(
             table=results,

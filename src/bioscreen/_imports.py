@@ -1,4 +1,5 @@
-"""universal imports, or stuff I might want and dont mind having in the namespace"""
+"""universal imports, or stuff I might want and dont mind having in the namespace.
+Can't include attrs here or PyCharm gets confused."""
 
 
 import enum
@@ -8,7 +9,11 @@ import collections
 import itertools
 import typing
 import logging
+
+
+
 from copy import copy, deepcopy
+
 
 
 
@@ -24,7 +29,7 @@ from typing import (
 )
 
 from jttools.data_wrangling import (
-    read_csv, AttrMapAC, read_tsv, rename_columns, is_numeric,
+    read_csv, AttrMapAC, read_tsv, df_rename_columns, is_numeric,
 
 )
 

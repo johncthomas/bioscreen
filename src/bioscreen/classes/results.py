@@ -1,14 +1,21 @@
+import pandas as pd
+
+from bioscreen._imports import *
 from bioscreen.classes.base import *
-from bioscreen.classes.comparison import CompList, Comparison
+from bioscreen.classes.comparison import CompDict, Comparison
 from attrs import define
 import xlsxwriter
 
+from jttools.excel import add_stats_worksheet
 
+from bioscreen.utils import ValidationError
+
+__all__ = ['AnalysisResults', 'comp_results_from_dir']
 
 def comp_results_from_dir(
         results_dir, fn_to_comp: Callable,
         columns:StatColumns=None, sep=',',
-    ) -> tuple[ComparisonsResults, CompList]:
+    ) -> tuple[CompsResultDF, CompDict]:
     """Load csv in dir, return a multiindexed DF with columns parsed
     from filenames (no directory) using fn_to_col.
 
@@ -23,44 +30,102 @@ def comp_results_from_dir(
         comp = fn_to_comp(fn)
         tbl = pd.read_csv(results_dir / fn,  sep=sep, index_col=0)
         if columns:
-            tbl.columns = rename_columns(tbl, columns.original_to_good())
+            tbl.columns = df_rename_columns(tbl, columns.original_to_key())
         results[str(comp)] = tbl
         comparisons.append( comp)
-    comparisons = CompList(comparisons)
+    comparisons = CompDict({c.name:c for c in comparisons})
     return (pd.concat(results, axis='columns'), comparisons)
 
+def rename_filter_stat_cols(df, cols:StatColumns) -> pd.DataFrame:
+    """Rename col.original to col.key. Drop any not included in cols."""
+    df_rename_columns(df, cols.original_to_key(), inplace=True, )
 
-@define
+    # drop unused columns
+    okay = df.columns.isin(cols.keys())
+    return df.loc[:, okay]
+
+def convert_stats_tables(dfs:Mapping[str, pd.DataFrame], cols:StatColumns,) \
+        -> CompsResultDF:
+    """Rename stat cols and concat dataframes into single multindex DF."""
+    new_tables = {}
+
+    for k, tab in dfs.items():
+        tab = rename_filter_stat_cols(tab, cols)
+
+        new_tables[k] = tab
+
+    table = pd.concat(new_tables, axis='columns')
+
+    if not table.any().any():
+        logger.warning("Returned table does not contain any non-null values.")
+    return table
+
+def comp_idx(resultsDF) -> pd.Index:
+    return resultsDF.columns.levels[0]
+def stat_idx(resultsDF) -> pd.Index:
+    return resultsDF.columns.levels[1]
+
+@define(kw_only=True)
 class AnalysisResults:
-    table: ComparisonsResults
-    columns: StatColumns
-    comparisons: CompList
-    score = ''
+    """A set of comparison results."""
+    table:CompsResultDF
+    comparisons:CompDict
+    columns:StatColumns
+    scorekey:str
+
+    def __attrs_post_init__(self):
+        validate_comps_df(self.table, self.columns, self.comparisons)
+
+    @staticmethod
+    def table_builder(tables, comparisons, columns):
+        """
+        If tables is a mapping of comparison key to a DF with original
+         column names, it will be converted to a multiindexed results DF with
+         proper statistic column names. Otherwise table should already be
+         converted, in which case nothing will be done to it."""
+        if isinstance(tables, pd.DataFrame):
+            if validate_comps_df(tables, columns, comparisons):
+                table = tables
+            else:
+                raise ValidationError('should have already happend.')
+        elif isinstance(tables, Mapping):
+            table = convert_stats_tables(tables, columns)
+        else:
+            raise ValueError("Pass a mapping of comparisonkey->DF")
+        return table
+
+    @classmethod
+    def build(cls, tables: CompsResultDF | Mapping[str, pd.DataFrame],
+              comparisons:CompDict, columns:StatColumns, scorekey=''):
+
+        table = cls.table_builder(tables, comparisons, columns)
+
+        cls(table=table, comparisons=comparisons,
+                            columns=columns, scorekey=scorekey)
 
     def get_stat_table(self, key) -> pd.DataFrame:
         return self.table.xs(key, level=1, axis=1)
 
     @property
     def score_table(self):
-        return self.get_stat_table(self.score)
+        return self.get_stat_table(self.scorekey)
 
     @property
     def fdr_table(self):
-        return self.get_stat_table('FDR')
+        return self.get_stat_table(SigCols.FDR.key)
 
     @property
     def p_table(self):
-        return self.get_stat_table('p')
+        return self.get_stat_table(SigCols.p.key)
 
     @property
     def fdr10_table(self):
         #return self.fdr_table.apply(neglog10)
-        return self.get_stat_table('FDR10')
+        return self.get_stat_table(SigCols.FDR10.key)
 
     @property
     def p10_table(self):
-        return self.get_stat_table('P10')
-
+        return self.get_stat_table(SigCols.p10.key)
 
 
     def result_table(self, ctrl_or_comp:typing.Union[str, Comparison],
@@ -77,9 +142,20 @@ class AnalysisResults:
         return self.table[comp].copy()
 
 
-    def write_comp_results_to_excel(self, filename, columns:Optional[Dict[str,str]]=None, **xlsx_table_opts):
+    def write_comp_results_to_excel(
+            self, filename:Pathy,
+            included_comparisons:Collection[str]= 'all',
+            drop_na_rows=True, xlsx_table_opts:dict=None):
         """Write comparisons table as excel workbook with one table
         per comp.
+
+        NA values will be replaced with 0 except for 'p' and 'FDR'.
+
+        Arguments:
+            filename: where file should be saved.
+            included_comparisons: set to only include certain stat columns.
+            drop_na_rows: if True, rows that contain only NA will be dropped.
+            xlsx_table_opts: kwargs passed to
 
         **xlx_table_opts passed to worksheet.add_table,
         see https://xlsxwriter.readthedocs.io/working_with_tables.html"""
@@ -88,39 +164,97 @@ class AnalysisResults:
 
         workbook = xlsxwriter.Workbook(filename)
 
-        for comp in self.comparisons:
-            worksheet = workbook.add_worksheet(name=comp.arrow_str())
-            tab = self.result_table(comp.str())
+        for compname, comp in self.comparisons.items():
+            if (included_comparisons != 'all') and (compname not in included_comparisons):
+                continue
+            table = self.result_table(comp)
 
-            if (tab.index.name is not None) and (tab.index.name not in tab.columns.values):
-                tab = tab.reset_index()
-            #xlsxwriter notation: (firstRow, firstCol, lastRow, lastCol)
-
-            #can end up with missing rows
-            # set the sig columns 1, and the rest to zero
-            if tab.isna().any().any():
-                logger.info(f"NAs found in {comp.str}, n={tab['P'].isna().sum()}, replacing with 1 or zero.")
-            for k in ('P', 'FDR'):
-                tab.loc[tab[k].isna(), k] = 1
-            tab.fillna(0, inplace=True)
-
-
-            # select and rename columns
-            tab = tab.reindex(columns=list(columns.keys()))
-            tab.sort_values([self.columns.p, self.columns.score], ascending=[True, False], inplace=True)
-            tab.columns = tab.columns.map(columns)
-
-            nrows, ncols = tab.shape
-            opts = dict(
-                data=tab.values,
-                columns=[{'header':c} for c in tab.columns],
-                name=comp.str(joiner='.'), # dash not allowed
-
+            table = out_table_formatter(
+                table,
+                included_columns=included_comparisons,
+                score_col=self.columns.score,
+                sort_table=True,
+                drop_na_rows=drop_na_rows,
             )
-            opts.update(xlsx_table_opts)
-            worksheet.add_table(
-                0, 0, nrows, ncols-1,
-                opts
+
+            add_stats_worksheet(
+                workbook=workbook,
+                table=table,
+                sheet_name=comp.arrow_str(),
+                xlsx_table_opts=dict(
+                    name=comp.joined('.')
+                ) | xlsx_table_opts
             )
 
         workbook.close()
+
+
+def out_table_formatter(
+        table:pd.DataFrame,
+        included_columns:Collection[str]='all',
+        sort_table=True,
+        sort_sig_col=SigCols.p,
+        score_col:str=None,
+        sig_cols=(SigCols.p, SigCols.FDR),
+        drop_na_rows=True,
+):
+    """Replace NaN values with 0, or 1 for significance measures, and sort columns."""
+    # can end up with missing rows
+    # set the sig columns 1, and the rest to zero
+
+    # remove dead rows
+    if drop_na_rows:
+        dead_rows = table.isna().all(1)
+        if sum(dead_rows):
+            logging.info(f"Dropping {sum(dead_rows)} empty rows")
+            table = table.loc[~dead_rows]
+
+    if table.isna().any().any():
+        logger.info(f"NAs found, n={table['P'].isna().sum()}, replacing with 1 or zero.")
+
+    for k in sig_cols:
+        table.loc[table[k].isna(), k] = 1
+    table.fillna(0, inplace=True)
+
+    # # select and rename columns
+    if included_columns != 'all':
+        table = table.reindex(columns=list(included_columns))
+
+    if sort_table:
+        if score_col is not None:
+            table.sort_values([sort_sig_col, score_col], ascending=[True, False], inplace=True)
+        else:
+            table.sort_values(sort_sig_col, ascending=True, inplace=True)
+    return table
+
+
+def validate_comps_df(df:CompsResultDF,
+                      columns:StatColumns,
+                      comparisons:CompDict) -> bool:
+    # deal with the table, it could be an already formated results DF
+    #   or mapping of comparison->DF
+
+    # if a multi-indexed table is passed...
+    if not hasattr(df.columns, 'levels'):
+        raise ValidationError(f"Comparisons results table must be multiindexed, by comparison")
+    # ..and it has the right columns, that's fine.
+    if not all(stat_idx(df).isin(columns.keys())):
+        raise ValidationError(f"Stat columns do not match."
+                        f"\n df={stat_idx(df)}; expected={columns.keys()}")
+
+    if not all(comp_idx(df).isin(comparisons.names())):
+        raise ValidationError(f"Comparison names in table not found in comparisons list.")
+
+    return True
+
+
+if __name__ == '__main__':
+    pass
+    # import pickle
+    # d = pathlib.Path('/mnt/m/tasks/NA327_Proteomics_UbPulldown/pickles2')
+    # with open(d/'smolcomp.1.pickle', 'rb') as f:
+    #     comp = pickle.load(f)
+    # with open(d/'test_tables.1.pickle', 'rb') as f:
+    #     tables = pickle.load(f)
+    #
+    # AnalysisResults(tables=tables, comparisons=comp, columns=get_limma_cols())
