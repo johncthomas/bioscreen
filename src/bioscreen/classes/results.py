@@ -44,14 +44,28 @@ def rename_filter_stat_cols(df, cols:StatColumns) -> pd.DataFrame:
     okay = df.columns.isin(cols.keys())
     return df.loc[:, okay]
 
-def convert_stats_tables(dfs:Mapping[str, pd.DataFrame], cols:StatColumns,) \
-        -> CompsResultDF:
+def add_log10_sig_cols(table:pd.DataFrame, sig_keys=('p', 'FDR'))\
+        -> pd.DataFrame:
+    """Add –log10(significance) columns to DF. New column names
+    will append "10" e.g. p10, FDR10.
+
+    Mutates the table in place, and returns it."""
+    for k in sig_keys:
+        table.loc[:, k+'10'] = table[k].apply(neglog10)
+    return table
+
+def convert_stats_tables(
+        dfs:Mapping[str, pd.DataFrame],
+        cols:StatColumns,
+        log10_sig=('p', 'FDR')
+) -> CompsResultDF:
     """Rename stat cols and concat dataframes into single multindex DF."""
     new_tables = {}
 
     for k, tab in dfs.items():
         tab = rename_filter_stat_cols(tab, cols)
-
+        if log10_sig:
+            add_log10_sig_cols(tab, log10_sig)
         new_tables[k] = tab
 
     table = pd.concat(new_tables, axis='columns')
@@ -63,6 +77,7 @@ def convert_stats_tables(dfs:Mapping[str, pd.DataFrame], cols:StatColumns,) \
 def comp_idx(resultsDF) -> pd.Index:
     return resultsDF.columns.levels[0]
 def stat_idx(resultsDF) -> pd.Index:
+    """resultsDF.columns.levels[1]"""
     return resultsDF.columns.levels[1]
 
 @define(kw_only=True)
@@ -77,19 +92,21 @@ class AnalysisResults:
         validate_comps_df(self.table, self.columns, self.comparisons)
 
     @staticmethod
-    def table_builder(tables, comparisons, columns):
-        """
-        If tables is a mapping of comparison key to a DF with original
-         column names, it will be converted to a multiindexed results DF with
-         proper statistic column names. Otherwise table should already be
-         converted, in which case nothing will be done to it."""
+    def _table_builder(tables:Mapping[str, pd.DataFrame], comparisons, columns, log10_sig=('p', 'FDR')):
+        """Take dict of DF, convert stat column names and return single
+        multi-indexed table.
+
+        If it's already a properly formatted table, it's returned as is.
+        (so that AnalysisResults can be built with results that have already
+        been parsed or not)"""
+
         if isinstance(tables, pd.DataFrame):
             if validate_comps_df(tables, columns, comparisons):
                 table = tables
             else:
                 raise ValidationError('should have already happend.')
         elif isinstance(tables, Mapping):
-            table = convert_stats_tables(tables, columns)
+            table = convert_stats_tables(tables, columns, log10_sig=log10_sig)
         else:
             raise ValueError("Pass a mapping of comparisonkey->DF")
         return table
@@ -97,11 +114,23 @@ class AnalysisResults:
     @classmethod
     def build(cls, tables: CompsResultDF | Mapping[str, pd.DataFrame],
               comparisons:CompDict, columns:StatColumns, scorekey=''):
+        # probably this will be reimplimented by each child class
+        #  with at least the scorekey value set
 
-        table = cls.table_builder(tables, comparisons, columns)
+        table = cls._table_builder(tables, comparisons, columns)
 
         cls(table=table, comparisons=comparisons,
                             columns=columns, scorekey=scorekey)
+
+    # make DF methods available
+    @property
+    def loc(self):
+        return self.table.loc
+
+    def __getitem__(self, k):
+        return self.table[k]
+
+    # todo access comps by attribute (with autocomplete)
 
     def get_stat_table(self, key) -> pd.DataFrame:
         return self.table.xs(key, level=1, axis=1)
@@ -237,13 +266,16 @@ def validate_comps_df(df:CompsResultDF,
     # if a multi-indexed table is passed...
     if not hasattr(df.columns, 'levels'):
         raise ValidationError(f"Comparisons results table must be multiindexed, by comparison")
+
     # ..and it has the right columns, that's fine.
-    if not all(stat_idx(df).isin(columns.keys())):
-        raise ValidationError(f"Stat columns do not match."
+    # if not all(stat_idx(df).isin(columns.keys())):
+    if not all([c in stat_idx(df) for c in columns.keys()]):
+        logger.warning(f"Stat columns do not match."
                         f"\n df={stat_idx(df)}; expected={columns.keys()}")
 
-    if not all(comp_idx(df).isin(comparisons.names())):
-        raise ValidationError(f"Comparison names in table not found in comparisons list.")
+    missing_comps = [c for c in comparisons.keys() if c not in comp_idx(df)]
+    if missing_comps:
+        logger.warning(f"Comparison in comparisons not found in results table:\n\t{missing_comps}")
 
     return True
 

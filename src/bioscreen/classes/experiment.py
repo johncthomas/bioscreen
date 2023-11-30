@@ -1,8 +1,10 @@
+import numpy as np
+
 from bioscreen._imports import *
 import pandas as pd
 
 from bioscreen.classes.base import *
-from bioscreen.classes.comparison import CompDict
+from bioscreen.classes.comparison import CompDict, Comparison
 from bioscreen.classes.results import AnalysisResults
 from attrs import define, Factory
 from bioscreen.utils import ValidationError, validate_sample_details, validate_count_df
@@ -12,6 +14,7 @@ from bioscreen.utils import ValidationError, validate_sample_details, validate_c
 __all__ = [
     'ScreenExperiment',
     'validate_screen_input',
+    'get_replicates_of_comparison'
 ]
 
 SDCOLFIXES = {'treat': 'Treatment',
@@ -62,6 +65,13 @@ def validate_screen_input(count:pd.DataFrame, details:pd.DataFrame, comparisons:
                                   f"{list(used_samples[~s_in_c])}")
 
 
+def get_replicates_of_comparison(sample_details, comparison:Comparison) -> np.ndarray[Sample]:
+    """Control and test samples used in a comparison. Controls first."""
+    m = sample_details.SampleGroup.isin([comparison.control, comparison.test])
+    reps = sample_details.loc[m, 'Sample'].values
+    return reps
+
+
 @define
 class ScreenExperiment:
     name: str
@@ -94,6 +104,12 @@ class ScreenExperiment:
             details=self.sample_details,
             comparisons=self.comparisons
         )
+
+    def replicates_of_comparison(self, comparison:Comparison|str) -> np.ndarray[Sample]:
+        """Control and test samples used in a comparison. Controls first."""
+        if type(comparison) is not Comparison:
+            comparison = self.comparisons[comparison]
+        return get_replicates_of_comparison(self.sample_details, comparison)
 
     @staticmethod
     def group_details_from_sample(sample_details:pd.DataFrame):

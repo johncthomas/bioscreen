@@ -26,7 +26,7 @@ class Comparison:
         label: A longer name for figures perhaps. Defaults to name.
         groups: Membership of groups, {"groupname":bool}.
 
-    Property
+    Properties:
         differential: Is this a differential comparison?
             True if control is a Comparison.
 
@@ -54,6 +54,42 @@ class Comparison:
     #  note, index is lower cased before being used.
     # Groups gets handled differently, cast to separate columns
     _kwargs = pd.Index(['control', 'test', 'paired', 'name', 'label'])
+
+    def __hash__(self):
+        return hash(self.name)
+
+
+    def joined(self,  joiner=DEFAULT_COMP_JOINER, test_first=True,):
+        """f"{self.test}-{self.control}" by default."""
+
+        if not self.differential:
+            test = str(self.test)
+            ctrl = str(self.control)
+            if test_first:
+                first = test
+                last = ctrl
+            else: # control first
+                first = ctrl
+                last = test
+            return f"{first}{joiner}{last}"
+        else:
+            return f"{self.control.name} ➤ {self.test.name}"
+
+    def __str__(self):
+        return self.name
+
+    def arrow_str(self, ):
+        return self.joined(joiner=' ➤ ', test_first=False)
+
+    def str(self,):
+        return self.__str__()
+
+    def formula_str(self):
+        """For formulas used in Limma etc, just
+        self.test - self.control"""
+        if self.differential:
+            return f"({self.test.formula_str()}) - ({self.control.formula_str()})"
+        return f"{self.test} - {self.control}"
 
     @property
     def differential(self):
@@ -134,38 +170,6 @@ class Comparison:
         seriesdict['Differential'] = self.differential
 
         return pd.Series(seriesdict, index=list(seriesdict.keys()))
-
-    def joined(self,  joiner=DEFAULT_COMP_JOINER, test_first=True,):
-        """f"{self.test}-{self.control}" by default."""
-
-        if not self.differential:
-            test = str(self.test)
-            ctrl = str(self.control)
-            if test_first:
-                first = test
-                last = ctrl
-            else: # control first
-                first = ctrl
-                last = test
-            return f"{first}{joiner}{last}"
-        else:
-            return f"{self.control.name} ➤ {self.test.name}"
-
-    def __str__(self):
-        return self.name
-
-    def arrow_str(self, ):
-        return self.joined(joiner=' ➤ ', test_first=False)
-
-    def str(self,):
-        return self.__str__()
-
-    def formula_str(self):
-        """For formulas used in Limma etc, just
-        self.test - self.control"""
-        if self.differential:
-            return f"({self.test.formula_str()}) - ({self.control.formula_str()})"
-        return f"{self.test} - {self.control}"
 
 
 # @define
@@ -260,7 +264,15 @@ class CompDict(AttrMapAC[str, Comparison]):
     def filter_by(self, f: Callable[[Comparison], bool]) \
             -> Self:
         """Filter comparisons from this CompList using a function that
-        takes a Comparison, and returns True or False."""
+        takes a Comparison, and returns True or False.
+
+        eg:
+            comparisons.filter_by(
+                lambda cmp: sample_details.SampleGroup.isin(
+                    [cmp.test, cmp.control]
+                ).any()
+            )
+        """
         return CompDict({
             c.name: c for c in self.values() if f(c)
         })

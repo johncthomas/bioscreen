@@ -1,3 +1,3 @@
-# from bioscreen import PCA, experiment_classes, counts, utils, validations
+from bioscreen import PCA
 
 #from .PCA import CountPCA

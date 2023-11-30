@@ -4,7 +4,7 @@ from bioscreen.classes.results import AnalysisResults, comp_results_from_dir
 from bioscreen.classes.comparison import Comparison, CompDict
 from attrs import define
 
-__all__ = ['LimmaResults', 'load_results']
+__all__ = ['LimmaResults', 'load_results', 'LIMMACOLS']
 
 
 def load_results(results_dir, columns, index_name='Gene') \
@@ -16,7 +16,6 @@ def load_results(results_dir, columns, index_name='Gene') \
         comp = Comparison(control=ctrl, test=test)
         return comp
 
-    print("assuming filename is '{test}.{ctrl}.csv' ")
     compres, comparisons = comp_results_from_dir(
         results_dir,
         fn_to_comp,
@@ -59,7 +58,7 @@ class LimmaResults(AnalysisResults):
               comparisons:CompDict, columns=LIMMACOLS,
               scorekey='LFC'):
 
-        table = cls.table_builder(tables, comparisons, columns)
+        table = cls._table_builder(tables, comparisons, columns)
 
         return cls(table=table, comparisons=comparisons,
                             columns=columns, scorekey=scorekey)
@@ -68,6 +67,7 @@ class LimmaResults(AnalysisResults):
     def from_dir(
             cls,
             results_dir,
+            scorekey='LFC',
             index_name='Gene',
             comparisons:CompDict=None):
 
@@ -79,7 +79,7 @@ class LimmaResults(AnalysisResults):
         if comparisons is None:
             comparisons = comps
         res.index.name = index_name
-        return cls(table=res, comparisons=comparisons, columns=LIMMACOLS)
+        return cls(table=res, comparisons=comparisons, columns=LIMMACOLS, scorekey=scorekey)
 
 
 if __name__ == '__main__':

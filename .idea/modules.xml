@@ -2,7 +2,7 @@
 <project version="4">
   <component name="ProjectModuleManager">
     <modules>
-      <module fileurl="file://$PROJECT_DIR$/.idea/experiment_classes.iml" filepath="$PROJECT_DIR$/.idea/experiment_classes.iml" />
+      <module fileurl="file://$PROJECT_DIR$/../bioscreen_root/.idea/bioscreen.iml" filepath="$PROJECT_DIR$/../bioscreen_root/.idea/bioscreen.iml" />
     </modules>
   </component>
 </project>

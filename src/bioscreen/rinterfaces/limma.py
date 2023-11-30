@@ -97,7 +97,8 @@ class Limma:
 
         Implimentation not use formulas. test_groups should identify combinations of
         treatments (if multiple used) and differential contrasts can be used
-        to pull out interactions.
+        to pull out interactions. The model doesn't use an intercept, so contrasts
+        are required.
 
         Arguments:
             counts: Appropriate abundance quantifications for limma.
@@ -105,13 +106,13 @@ class Limma:
                 SampleGroup and columns for all model_factors.
             comparisons: List of Comparisons to form contrasts.
             test_groups: Test group names in order of appearance in counts.
-                Will probably just be SampleGroups, but doesn't need to be.
+                Will probably just be SampleGroups.
             block: Random factors. Variation specific to these detected with
                 duplicateCorrelation and accounted for in the model.
             voom_counts: Apply voom to counts before running, e.g. they are RNAseq
                 counts and need VST.
-
             analysis_version: A string identifying this specific analysis.
+                Currently is just recorded in the class instance.
 
         Methods:
             run: call all functions required to run analysis and return dict of DF
@@ -122,7 +123,7 @@ class Limma:
 
         self.sample_details = sample_details
         self.comparisons = comparisons
-        self.analysis_version = analysis_version
+        self.analysis_version = analysis_version #update doc if you ever do anything with this
         self.counts:pd.DataFrame = counts
         self.test_groups:Collection[str] = list(test_groups)
         self.voom_counts = voom_counts
@@ -130,7 +131,9 @@ class Limma:
         self.block:Collection[str] = block
         self.robj = LimmaRObjects()
 
-        
+    #todo Limma.from_experiment
+    # does things like pulling test_groups from sample_details automatically
+
 
 
     def prep_rnaseq_data(self):

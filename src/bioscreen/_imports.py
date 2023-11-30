@@ -11,7 +11,6 @@ import typing
 import logging
 
 
-
 from copy import copy, deepcopy
 
 
@@ -19,6 +18,7 @@ from copy import copy, deepcopy
 
 import attrs
 import pandas as pd
+import numpy as np
 
 #from attrs import define, Factory, field
 # has to be imported into the local module currently or the pycharm linter gets confused.
@@ -41,3 +41,7 @@ from jttools.statistics import (
 from bioscreen.utils import(
     Pathy, AMap
 )
+
+from jttools.excel import conditional_format_definitions
+sigfmtxl = conditional_format_definitions.significance()
+scrfmtxl = conditional_format_definitions.score()

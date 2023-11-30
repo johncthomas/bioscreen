@@ -1,5 +1,6 @@
 import pandas as pd
 
+#import bioscreen.experiment_classes
 from bioscreen._imports import *
 
 import attrs
@@ -57,7 +58,7 @@ class StatCol(str):
     str.__new__.
 
     key: Key used to retrieve column from processed stat table. Should be
-        useable as an attribute.
+        useable as an attribute, initial upper case.
     original: Column string used in analysis output
     table: Col string for use in exported tables
     label: Longer label used in figures
@@ -86,6 +87,9 @@ class StatCol(str):
         self.original = original
 
         return self
+
+    def __hash__(self):
+        return hash(self.key)
 
     @property
     def formatted(self):
@@ -144,10 +148,20 @@ class StatColumns(AMap):
 
     @property
     def short(self) -> AMap:
+        logger.warning("StatColumns.short depreciated, use .table instead.")
         return AMap({k:col.table for k, col in self.items()})
 
     @property
     def long(self) -> AMap:
+        logger.warning("StatColumns.long depreciated, use .label instead.")
+        return AMap({k: col.label for k, col in self.items()})
+
+    @property
+    def table(self) -> AMap:
+        return AMap({k:col.table for k, col in self.items()})
+
+    @property
+    def label(self) -> AMap:
         return AMap({k: col.label for k, col in self.items()})
 
     @property
@@ -160,6 +174,10 @@ class StatColumns(AMap):
 
     def original_to_key(self) -> dict:
         return {col.original:col.key for col in self.values()}
+
+    def rename_df_columns(self, results_df:pd.DataFrame, inplace=False):
+        """Rename columns using 'original'->'key' mappings."""
+        return df_rename_columns(results_df, self.original_to_key(), inplace=inplace)
 
     def get_mapping(self, askey='key', asvalue:str=StatCol) -> dict[str, StatCol|str]:
         """Return a dict mapping desired attribute to its StatCol, or
