@@ -1,3 +1,6 @@
+# NOTE this is not a python file, but I've never found a consistent way to get data files
+#  to actually get installed except by putting ".py" on the end
+
 # These paths are the linux box system R, otherwise it uses the local conda
 #  env, and I don't want to install a bunch of R packages into the general env
 libs = c("/usr/local/lib/R/site-library", "/usr/lib/R/site-library", "/usr/lib/R/library")
